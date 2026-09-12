@@ -139,10 +139,10 @@ class SeasonAndCollisionTest {
 
     private SimulationTickEngine createEngineWithSeasonCommands() {
         List<SimulationCommand> seasonalSimulationCommands = List.of(
-            new SimulationCommand("season", 100, "Summer"),
-            new SimulationCommand("season", 200, "Autumn"),
-            new SimulationCommand("season", 300, "Winter"),
-            new SimulationCommand("season", 400, "Spring"));
+            new SimulationCommand("season", 100, "Summer", null),
+            new SimulationCommand("season", 200, "Autumn", null),
+            new SimulationCommand("season", 300, "Winter", null),
+            new SimulationCommand("season", 400, "Spring", null));
         LevelState levelState = new LevelState(false, 50, 50, 500, List.of(), seasonalSimulationCommands);
         return new SimulationTickEngine(levelState);
     }
