@@ -6,12 +6,14 @@ import java.util.Arrays;
 
 public class SimulationGridState {
 
-    private static final byte INITIAL_CELLULAR_NUTRIENT_POINTS_PER_CELL = 100;
+    public static final int MAXIMUM_CELLULAR_NUTRIENT_POINTS_PER_CELL = 100;
+    public static final int DEAD_PLANT_INDEX = 0;
 
     private final int verticalRowCoordinateCount;
     private final int horizontalColumnCoordinateCount;
 
     private final short[][] plantPopulationGrid;
+    private final short[][] plantAgeInTicksGrid;
     private final byte[][] cellularNutrientCapacityGrid;
     private final byte[][] environmentalSoilTypeGrid;
     private final byte[][] environmentalTerrainTypeGrid;
@@ -24,6 +26,7 @@ public class SimulationGridState {
         this.verticalRowCoordinateCount = levelState.rowCount();
         this.horizontalColumnCoordinateCount = levelState.columnCount();
         this.plantPopulationGrid = new short[verticalRowCoordinateCount][horizontalColumnCoordinateCount];
+        this.plantAgeInTicksGrid = new short[verticalRowCoordinateCount][horizontalColumnCoordinateCount];
         this.cellularNutrientCapacityGrid = new byte[verticalRowCoordinateCount][horizontalColumnCoordinateCount];
         this.environmentalSoilTypeGrid = new byte[verticalRowCoordinateCount][horizontalColumnCoordinateCount];
         this.environmentalTerrainTypeGrid = new byte[verticalRowCoordinateCount][horizontalColumnCoordinateCount];
@@ -36,7 +39,7 @@ public class SimulationGridState {
         for (int verticalRowCoordinate = 0; verticalRowCoordinate < verticalRowCoordinateCount; verticalRowCoordinate++) {
             Arrays.fill(
                 cellularNutrientCapacityGrid[verticalRowCoordinate],
-                INITIAL_CELLULAR_NUTRIENT_POINTS_PER_CELL);
+                (byte) MAXIMUM_CELLULAR_NUTRIENT_POINTS_PER_CELL);
         }
     }
 
@@ -76,6 +79,10 @@ public class SimulationGridState {
         return plantPopulationGrid;
     }
 
+    public short[][] plantAgeInTicksGrid() {
+        return plantAgeInTicksGrid;
+    }
+
     public byte[][] cellularNutrientCapacityGrid() {
         return cellularNutrientCapacityGrid;
     }
@@ -86,6 +93,53 @@ public class SimulationGridState {
 
     public byte[][] environmentalTerrainTypeGrid() {
         return environmentalTerrainTypeGrid;
+    }
+
+    public int plantIndexOfCell(int verticalRowCoordinate, int horizontalColumnCoordinate) {
+        validateCoordinateWithinGridBounds(verticalRowCoordinate, horizontalColumnCoordinate);
+        return Short.toUnsignedInt(plantPopulationGrid[verticalRowCoordinate][horizontalColumnCoordinate]);
+    }
+
+    public int plantAgeInTicksAt(int verticalRowCoordinate, int horizontalColumnCoordinate) {
+        validateCoordinateWithinGridBounds(verticalRowCoordinate, horizontalColumnCoordinate);
+        return Short.toUnsignedInt(plantAgeInTicksGrid[verticalRowCoordinate][horizontalColumnCoordinate]);
+    }
+
+    public void registerNewPlantAt(int verticalRowCoordinate, int horizontalColumnCoordinate, int plantIndex) {
+        validateCoordinateWithinGridBounds(verticalRowCoordinate, horizontalColumnCoordinate);
+        if (plantIndex < 0) {
+            throw new IllegalArgumentException("Plant index cannot be negative; received [" + plantIndex + "].");
+        }
+        if (plantIndex > Short.MAX_VALUE) {
+            throw new IllegalArgumentException(
+                "Plant index [" + plantIndex + "] exceeds the maximum storable plant index [" + Short.MAX_VALUE + "].");
+        }
+        plantPopulationGrid[verticalRowCoordinate][horizontalColumnCoordinate] = (short) plantIndex;
+        plantAgeInTicksGrid[verticalRowCoordinate][horizontalColumnCoordinate] = 0;
+    }
+
+    public void terminatePlantAt(int verticalRowCoordinate, int horizontalColumnCoordinate) {
+        validateCoordinateWithinGridBounds(verticalRowCoordinate, horizontalColumnCoordinate);
+        plantPopulationGrid[verticalRowCoordinate][horizontalColumnCoordinate] = DEAD_PLANT_INDEX;
+        plantAgeInTicksGrid[verticalRowCoordinate][horizontalColumnCoordinate] = 0;
+    }
+
+    public void incrementPlantAgeInTicksAt(int verticalRowCoordinate, int horizontalColumnCoordinate) {
+        validateCoordinateWithinGridBounds(verticalRowCoordinate, horizontalColumnCoordinate);
+        int currentAgeInTicks = Short.toUnsignedInt(plantAgeInTicksGrid[verticalRowCoordinate][horizontalColumnCoordinate]);
+        if (currentAgeInTicks < Short.MAX_VALUE) {
+            plantAgeInTicksGrid[verticalRowCoordinate][horizontalColumnCoordinate] = (short) (currentAgeInTicks + 1);
+        }
+    }
+
+    public void setCellularNutrientPointsAt(int verticalRowCoordinate, int horizontalColumnCoordinate, int nutrientPoints) {
+        validateCoordinateWithinGridBounds(verticalRowCoordinate, horizontalColumnCoordinate);
+        if (nutrientPoints < 0 || nutrientPoints > MAXIMUM_CELLULAR_NUTRIENT_POINTS_PER_CELL) {
+            throw new IllegalArgumentException(
+                "Nutrient points [" + nutrientPoints + "] must be within the range [0, "
+                    + MAXIMUM_CELLULAR_NUTRIENT_POINTS_PER_CELL + "].");
+        }
+        cellularNutrientCapacityGrid[verticalRowCoordinate][horizontalColumnCoordinate] = (byte) nutrientPoints;
     }
 
     public int cellularNutrientPointsAt(int verticalRowCoordinate, int horizontalColumnCoordinate) {
