@@ -30,6 +30,8 @@ public class SimulationOptimizer {
     public static final int DEFAULT_TIME_REQUIRED_TO_REACH_MATURITY_IN_TICKS = 1;
     public static final boolean DEFAULT_DOES_PLANT_POSSESS_NO_WINTER_SPREAD_WEAKNESS = false;
     public static final int SCORE_MULTIPLIER_PER_LIVING_PLANT = 100;
+    public static final int DEFAULT_LEVEL_FOUR_VERTICAL_ROW_COORDINATE_COUNT = 200;
+    public static final int DEFAULT_LEVEL_FOUR_HORIZONTAL_COLUMN_COORDINATE_COUNT = 300;
 
     public static final int MAXIMUM_PLACEMENT_ACTIONS_PER_TICK = 20;
     public static final int MAXIMUM_PLACEMENT_ATTEMPT_COUNT_PER_TICK = 1000;

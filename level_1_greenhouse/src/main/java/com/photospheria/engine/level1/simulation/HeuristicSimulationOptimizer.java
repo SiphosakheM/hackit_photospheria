@@ -27,6 +27,13 @@ public class HeuristicSimulationOptimizer {
     public static final int MAXIMUM_PLACEMENT_ACTIONS_PER_TICK = SimulationOptimizer.MAXIMUM_PLACEMENT_ACTIONS_PER_TICK;
     public static final int MAXIMUM_PLACEMENT_ATTEMPT_COUNT_PER_TICK = SimulationOptimizer.MAXIMUM_PLACEMENT_ATTEMPT_COUNT_PER_TICK;
     public static final boolean ALL_KNOWN_PLANTS_POSSESS_NO_WINTER_SPREAD_WEAKNESS = false;
+    public static final int FAST_FAIL_ENTROPY_EVALUATION_TICK = 100;
+    public static final int FAST_FAIL_LIVING_PLANT_DIVERSITY_WEIGHT = 50;
+    public static final int FAST_FAIL_MINIMUM_ENTROPY_SCORE_THRESHOLD = 350;
+    public static final int DEFAULT_LEVEL_FOUR_VERTICAL_ROW_COORDINATE_COUNT =
+        SimulationOptimizer.DEFAULT_LEVEL_FOUR_VERTICAL_ROW_COORDINATE_COUNT;
+    public static final int DEFAULT_LEVEL_FOUR_HORIZONTAL_COLUMN_COORDINATE_COUNT =
+        SimulationOptimizer.DEFAULT_LEVEL_FOUR_HORIZONTAL_COLUMN_COORDINATE_COUNT;
 
     public static final List<Integer> LEVEL_THREE_PLACEMENT_POOL_PLANT_INDEXES = List.of(
         GRASS_PLANT_INDEX,
@@ -34,8 +41,8 @@ public class HeuristicSimulationOptimizer {
         CRIMSON_VINE_PLANT_INDEX,
         STONE_REED_PLANT_INDEX);
 
-    private static final String DEFAULT_INPUT_FILE_PATH = "shared_data/level_three_state.json";
-    private static final String DEFAULT_LEVEL_THREE_OUTPUT_FILE_PATH = "level_3_hackathon/outputs/solution.json";
+    private static final String DEFAULT_INPUT_FILE_PATH = "shared_data/level_four_state.json";
+    private static final String DEFAULT_LEVEL_FOUR_OUTPUT_FILE_PATH = "level_4_mountain/outputs/solution.json";
 
     public static void main(String[] args) {
         try {
@@ -48,7 +55,7 @@ public class HeuristicSimulationOptimizer {
 
             String requestedOutputFilePath = resolveArgumentOrDefault(args, 1, null);
             File outputStateFile = resolveRepositoryRootRelativeFile(
-                requestedOutputFilePath != null ? requestedOutputFilePath : DEFAULT_LEVEL_THREE_OUTPUT_FILE_PATH);
+                requestedOutputFilePath != null ? requestedOutputFilePath : DEFAULT_LEVEL_FOUR_OUTPUT_FILE_PATH);
 
             HeuristicSimulationRunScore winningHeuristicRun = optimizeHeuristicallyWithStructuredConcurrency(levelState, optimizationSeedCount);
             writeSolutionFile(outputStateFile, levelState, optimizationSeedCount, winningHeuristicRun);
@@ -82,6 +89,7 @@ public class HeuristicSimulationOptimizer {
         }
 
         HeuristicSimulationRunScore bestScoringHeuristicRun = null;
+        HeuristicSimulationRunScore bestScoringFastFailedHeuristicRun = null;
         for (long batchStartSeedIndex = 1L;
             batchStartSeedIndex <= optimizationSeedCount;
             batchStartSeedIndex += STRUCTURED_SCOPE_SEED_BATCH_SIZE) {
@@ -94,13 +102,22 @@ public class HeuristicSimulationOptimizer {
                 batchStartSeedIndex,
                 batchEndSeedIndexExclusive);
             for (HeuristicSimulationRunScore candidateHeuristicRunScore : batchHeuristicRunScores) {
+                if (candidateHeuristicRunScore.wasFastFailedSimulation()) {
+                    if (bestScoringFastFailedHeuristicRun == null
+                        || candidateHeuristicRunScore.finalScore() > bestScoringFastFailedHeuristicRun.finalScore()) {
+                        bestScoringFastFailedHeuristicRun = candidateHeuristicRunScore;
+                    }
+                    continue;
+                }
                 if (bestScoringHeuristicRun == null
                     || candidateHeuristicRunScore.finalScore() > bestScoringHeuristicRun.finalScore()) {
                     bestScoringHeuristicRun = candidateHeuristicRunScore;
                 }
             }
         }
-        return bestScoringHeuristicRun;
+        return bestScoringHeuristicRun != null
+            ? bestScoringHeuristicRun
+            : bestScoringFastFailedHeuristicRun;
     }
 
     private static List<HeuristicSimulationRunScore> runSeedBatchWithinStructuredTaskScope(
@@ -108,7 +125,7 @@ public class HeuristicSimulationOptimizer {
             long batchStartSeedIndexInclusive,
             long batchEndSeedIndexExclusive) throws InterruptedException {
 
-        try (StructuredTaskScope<HeuristicSimulationRunScore, List<HeuristicSimulationRunScore>> structuredTaskScope =
+        try (StructuredTaskScope<HeuristicSimulationRunScore, List<HeuristicSimulationRunScore>> concurrentVirtualThreadTaskScope =
             StructuredTaskScope.<HeuristicSimulationRunScore, List<HeuristicSimulationRunScore>>open(
                 StructuredTaskScope.Joiner.<HeuristicSimulationRunScore>allSuccessfulOrThrow(),
                 structuredTaskScopeConfiguration -> structuredTaskScopeConfiguration.withThreadFactory(
@@ -116,10 +133,10 @@ public class HeuristicSimulationOptimizer {
 
             for (long seedIndex = batchStartSeedIndexInclusive; seedIndex < batchEndSeedIndexExclusive; seedIndex++) {
                 final long capturedSeedIndex = seedIndex;
-                structuredTaskScope.fork(
+                concurrentVirtualThreadTaskScope.fork(
                     () -> simulateHeuristicDeterministicRun(levelState, capturedSeedIndex));
             }
-            return structuredTaskScope.join();
+            return concurrentVirtualThreadTaskScope.join();
         }
     }
 
@@ -135,6 +152,7 @@ public class HeuristicSimulationOptimizer {
         List<Coordinate> preComputedCoordinatesWithCultivableSoilTopography =
             computePreComputedCoordinatesWithCultivableSoilTopography(simulationGridState);
 
+        boolean didSimulationFastFailBelowBaselineEntropy = false;
         for (int currentSimulationTick = 1; currentSimulationTick <= levelState.tickCount(); currentSimulationTick++) {
             generateAndExecuteHeuristicPlacementActionsForCurrentTick(
                 simulationGridState,
@@ -146,6 +164,13 @@ public class HeuristicSimulationOptimizer {
             simulationTickEngine.updateEnvironmentalSeasonForCurrentTick(currentSimulationTick);
             biologicalLifecycleProcessor.advanceBiologicalProcessesForSingleTick();
             executeSpreadPhaseForCurrentTick(simulationGridState, simulationTickEngine);
+
+            if (currentSimulationTick == FAST_FAIL_ENTROPY_EVALUATION_TICK
+                && shouldFastFailSimulationForBelowBaselineEntropy(
+                calculateLivingPlantEntropyScore(simulationGridState))) {
+                didSimulationFastFailBelowBaselineEntropy = true;
+                break;
+            }
         }
 
         int[][] finalPlantPopulationGrid = exportPlantPopulationGrid(simulationGridState);
@@ -161,7 +186,35 @@ public class HeuristicSimulationOptimizer {
             finalTotalNutrientPoints,
             placementActionsRecord,
             finalPlantPopulationGrid,
-            finalCellularNutrientGrid);
+            finalCellularNutrientGrid,
+            didSimulationFastFailBelowBaselineEntropy);
+    }
+
+    static long calculateLivingPlantEntropyScore(SimulationGridState simulationGridState) {
+        if (simulationGridState == null) {
+            throw new IllegalArgumentException("SimulationGridState cannot be null.");
+        }
+        Set<Integer> livingPlantSpeciesIndexes = new HashSet<>();
+        int livingPlantCount = 0;
+        for (int verticalRowCoordinate = 0;
+            verticalRowCoordinate < simulationGridState.verticalRowCoordinateCount();
+            verticalRowCoordinate++) {
+            for (int horizontalColumnCoordinate = 0;
+                horizontalColumnCoordinate < simulationGridState.horizontalColumnCoordinateCount();
+                horizontalColumnCoordinate++) {
+                int plantIndexAtCell = simulationGridState.plantIndexOfCell(verticalRowCoordinate, horizontalColumnCoordinate);
+                if (plantIndexAtCell != SimulationGridState.DEAD_PLANT_INDEX) {
+                    livingPlantCount++;
+                    livingPlantSpeciesIndexes.add(plantIndexAtCell);
+                }
+            }
+        }
+        return livingPlantCount
+            + (long) livingPlantSpeciesIndexes.size() * FAST_FAIL_LIVING_PLANT_DIVERSITY_WEIGHT;
+    }
+
+    static boolean shouldFastFailSimulationForBelowBaselineEntropy(long livingPlantEntropyScore) {
+        return livingPlantEntropyScore < FAST_FAIL_MINIMUM_ENTROPY_SCORE_THRESHOLD;
     }
 
     public static List<Coordinate> computePreComputedCoordinatesAdjacentToRockTerrain(SimulationGridState simulationGridState) {
@@ -522,7 +575,7 @@ public class HeuristicSimulationOptimizer {
         }
 
         Map<String, Object> solutionOutput = new LinkedHashMap<>();
-        solutionOutput.put("level_number", 3);
+        solutionOutput.put("level_number", 4);
         solutionOutput.put("deterministic_reproducibility", true);
         solutionOutput.put("total_simulation_ticks_advanced", levelState.tickCount());
         solutionOutput.put("optimization_seed_count_compared", optimizationSeedCount);
@@ -635,6 +688,7 @@ public class HeuristicSimulationOptimizer {
             long finalTotalNutrientPoints,
             List<SimulationOptimizer.PlantingAction> placementActionsRecord,
             int[][] finalPlantPopulationGrid,
-            int[][] finalCellularNutrientGrid) {
+            int[][] finalCellularNutrientGrid,
+            boolean wasFastFailedSimulation) {
     }
 }
