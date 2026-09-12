@@ -1,9 +1,16 @@
 package com.photospheria.engine.level1.simulation;
 
+import com.photospheria.engine.level1.configuration.LevelState;
+import com.photospheria.engine.level1.configuration.SimulationCommand;
 import java.util.ArrayList;
 import java.util.List;
 
 public class SimulationTickEngine {
+
+    private static final String DEFAULT_ENVIRONMENTAL_SEASON = "Spring";
+    private static final String WINTER_ENVIRONMENTAL_SEASON = "Winter";
+    private static final String SEASON_COMMAND_TYPE = "season";
+    private static final String NO_WINTER_SPREAD_WEAKNESS_RULE = "no_winter_spread";
 
     private static final String VON_NEUMANN_SPATIAL_PROPAGATION_GEOMETRY = "VonNeumann";
     private static final String MOORE_SPATIAL_PROPAGATION_GEOMETRY = "Moore";
@@ -11,9 +18,126 @@ public class SimulationTickEngine {
     private static final String COLUMN_SPATIAL_PROPAGATION_GEOMETRY = "Column";
     private static final String CROSS_HATCH_SPATIAL_PROPAGATION_GEOMETRY = "CrossHatch";
 
+    private String currentEnvironmentalSeason;
+    private final SimulationGridState simulationGridState;
+    private final List<SimulationCommand> simulationCommands;
+
     public record SimulationCoordinate(
             int targetVerticalRowCoordinate,
             int targetHorizontalColumnCoordinate) {
+    }
+
+    public SimulationTickEngine() {
+        this.currentEnvironmentalSeason = DEFAULT_ENVIRONMENTAL_SEASON;
+        this.simulationGridState = null;
+        this.simulationCommands = List.of();
+    }
+
+    public SimulationTickEngine(LevelState levelState) {
+        this(
+            new SimulationGridState(levelState),
+            levelState.simulationCommands());
+    }
+
+    public SimulationTickEngine(SimulationGridState simulationGridState, List<SimulationCommand> simulationCommands) {
+        if (simulationGridState == null) {
+            throw new IllegalArgumentException("SimulationGridState cannot be null.");
+        }
+        if (simulationCommands == null) {
+            throw new IllegalArgumentException("SimulationCommands list cannot be null.");
+        }
+        this.currentEnvironmentalSeason = DEFAULT_ENVIRONMENTAL_SEASON;
+        this.simulationGridState = simulationGridState;
+        this.simulationCommands = List.copyOf(simulationCommands);
+    }
+
+    public SimulationGridState simulationGridState() {
+        return simulationGridState;
+    }
+
+    public String currentEnvironmentalSeason() {
+        return currentEnvironmentalSeason;
+    }
+
+    public void updateEnvironmentalSeasonForCurrentTick(int currentSimulationTick) {
+        if (currentSimulationTick < 0) {
+            throw new IllegalArgumentException(
+                "Current simulation tick cannot be negative; received [" + currentSimulationTick + "].");
+        }
+        String latestApplicableSeasonName = DEFAULT_ENVIRONMENTAL_SEASON;
+        for (SimulationCommand simulationCommand : simulationCommands) {
+            if (SEASON_COMMAND_TYPE.equalsIgnoreCase(simulationCommand.commandType())
+                && simulationCommand.executionTick() <= currentSimulationTick) {
+                latestApplicableSeasonName = simulationCommand.seasonNamePresent().orElse(latestApplicableSeasonName);
+            }
+        }
+        this.currentEnvironmentalSeason = latestApplicableSeasonName;
+    }
+
+    public List<SimulationCoordinate> resolveSeasonalSpreadTargetCoordinates(
+            int centerVerticalRowCoordinate,
+            int centerHorizontalColumnCoordinate,
+            int propagationSpreadRadius,
+            String spatialPropagationGeometryType,
+            boolean doesPlantPossessNoWinterSpreadWeakness,
+            int gridVerticalRowCount,
+            int gridHorizontalColumnCount) {
+
+        if (doesPlantPossessNoWinterSpreadWeakness
+            && WINTER_ENVIRONMENTAL_SEASON.equalsIgnoreCase(currentEnvironmentalSeason)) {
+            return List.of();
+        }
+
+        return resolveSpreadTargetCoordinates(
+            centerVerticalRowCoordinate,
+            centerHorizontalColumnCoordinate,
+            propagationSpreadRadius,
+            spatialPropagationGeometryType,
+            gridVerticalRowCount,
+            gridHorizontalColumnCount);
+    }
+
+    public void executeSpreadForSinglePlant(
+            int sourceVerticalRowCoordinate,
+            int sourceHorizontalColumnCoordinate,
+            int propagationSpreadRadius,
+            String spatialPropagationGeometryType,
+            boolean doesPlantPossessNoWinterSpreadWeakness,
+            int timeRequiredToReachMaturityInTicks,
+            int plantIndexToPlantWhenSpreadSucceeds) {
+
+        requireSimulationGridStateAvailable();
+        if (simulationGridState.plantIndexOfCell(sourceVerticalRowCoordinate, sourceHorizontalColumnCoordinate)
+            == SimulationGridState.DEAD_PLANT_INDEX) {
+            return;
+        }
+        if (simulationGridState.plantAgeInTicksAt(sourceVerticalRowCoordinate, sourceHorizontalColumnCoordinate)
+            < timeRequiredToReachMaturityInTicks) {
+            return;
+        }
+
+        List<SimulationCoordinate> spreadTargetCoordinates = resolveSeasonalSpreadTargetCoordinates(
+            sourceVerticalRowCoordinate,
+            sourceHorizontalColumnCoordinate,
+            propagationSpreadRadius,
+            spatialPropagationGeometryType,
+            doesPlantPossessNoWinterSpreadWeakness,
+            simulationGridState.verticalRowCoordinateCount(),
+            simulationGridState.horizontalColumnCoordinateCount());
+
+        for (SimulationCoordinate spreadTargetCoordinate : spreadTargetCoordinates) {
+            simulationGridState.registerNewPlantAt(
+                spreadTargetCoordinate.targetVerticalRowCoordinate(),
+                spreadTargetCoordinate.targetHorizontalColumnCoordinate(),
+                plantIndexToPlantWhenSpreadSucceeds);
+        }
+    }
+
+    private void requireSimulationGridStateAvailable() {
+        if (simulationGridState == null) {
+            throw new IllegalStateException(
+                "SimulationGridState is required to execute spread actions; construct this engine with a SimulationGridState or LevelState.");
+        }
     }
 
     public List<SimulationCoordinate> resolveSpreadTargetCoordinates(
